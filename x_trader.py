@@ -86,4 +86,5 @@ def backtest(df):
     cerebro = bt.Cerebro()
     data = bt.feeds.PandasData(dataname=df)
     cerebro.adddata(data)
-    cerebro.addstrategy(M
+    cerebro.addstrategy(MovingAverageCross)
+    cerebro.run()
