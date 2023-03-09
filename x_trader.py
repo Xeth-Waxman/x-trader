@@ -8,45 +8,69 @@ import io
 import os
 
 # Step 1: Collect Data
-def get_data(api_key, symbol, interval):
-    # generate a unique cache key for the request
-    cache_key = hashlib.sha256(f"{symbol}_{interval}_{datetime.date.today()}".encode()).hexdigest()
+def get_data(api_key, symbol):
+    # Generate cache key and cache file name
+    cache_key = hashlib.sha256(f"{symbol}_{datetime.date.today()}".encode()).hexdigest()
+    cache_file = f"{cache_key}.joblib"
     
-    # check if data is in cache and is not stale
-    cached_data = joblib.load(f"{cache_key}.joblib")
-    if cached_data is not None:
-        cache_time = datetime.datetime.fromtimestamp(os.path.getmtime(f"{cache_key}.joblib"))
+    # Check if cached data exists and is not stale
+    if os.path.exists(cache_file):
+        cached_data = joblib.load(cache_file)
+        cache_time = datetime.datetime.fromtimestamp(os.path.getmtime(cache_file))
         current_time = datetime.datetime.now()
         time_since_update = current_time - cache_time
         if time_since_update < datetime.timedelta(days=1):
             return cached_data
     
-    # if data is not in cache or is stale, make API request
-    url = f'https://www.alphavantage.co/query?function=TIME_SERIES_{interval}&symbol={symbol}&apikey={api_key}&datatype=csv'
+    # Make API request if cached data is not available or stale
+    url = f'https://www.alphavantage.co/query?function=TIME_SERIES_DAILY_ADJUSTED&symbol={symbol}outputsize=full&apikey={api_key}&datatype=csv'
     response = requests.get(url)
+
+    #debug
+    print(response.content)
+    #/debug
+
     if response.status_code != 200:
         raise ValueError(f"API request failed with status code {response.status_code}")
+    df = pd.DataFrame(pd.np.empty((0, 8)))
     df = pd.read_csv(io.StringIO(response.content.decode('utf-8')))
-    df.set_index('timestamp', inplace=True)
+    df.set_index(pd.to_datetime(df.index), inplace=True)
     
-    # cache the data
-    joblib.dump(df, f"{cache_key}.joblib")
+    # Set the index to the date string
+    df.index = pd.to_datetime(df.index)
+    
+    # Cache the data
+    joblib.dump(df, cache_file)
+    
     return df
+
+
 
 # Step 2a: Fill Missing Values
 def fill_missing_values(df):
-    df['close'] = df['close'].fillna(method='ffill')
+    df['4. close'] = df['4. close'].fillna(method='ffill')
     return df
 
 # Step 2b: Calculate Returns
 def calculate_returns(df):
-    df['returns'] = df['close'].pct_change()
+    df['returns'] = df['4. close'].pct_change()
     return df
 
 # Step 2: Data Preparation
 def prepare_data(df):
+    # Rename columns to a simpler format
+    df.columns = ['Open', 'High', 'Low', 'Close', 'Adjusted Close', 'Volume', 'Dividend Amount', 'Split Coefficient']
+    
+    # Drop columns we don't need
+    df = df.drop(columns=['Open', 'High', 'Low', 'Dividend Amount', 'Split Coefficient'])
+
+    # Convert index to datetime and sort
+    df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
+
+    # Fill missing values
     df = fill_missing_values(df)
-    df = calculate_returns(df)
+
     return df
 
 # Step 3: Technical Analysis
@@ -87,4 +111,16 @@ def backtest(df):
     data = bt.feeds.PandasData(dataname=df)
     cerebro.adddata(data)
     cerebro.addstrategy(MovingAverageCross)
-    cerebro.run()
+    cerebro.run(tradehistory=True)
+
+    # Print final portfolio value
+    print(f"Final Portfolio Value: {cerebro.broker.getvalue():,.2f}")
+
+if __name__ == '__main__':
+    # Call your functions here
+    api_key = 'ZG5MLKJMUZ2UEAJ8'
+    symbol = 'LPLA'
+    data = get_data(api_key, symbol)
+    prepared_data = prepare_data(data)
+    technical_data = calculate_technical_indicators(prepared_data)
+    backtest(technical_data)
